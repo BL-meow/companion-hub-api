@@ -101,3 +101,30 @@ def list_companions():
         for companion in companions
     ]), 200
 
+@companions_bp.get("/<int:companion_id>")
+@require_auth
+def get_companion(companion_id):
+    companion = Companion.query.filter_by(
+    id=companion_id,
+    user_id=g.current_user_id
+).first()
+
+    if companion is None:
+        return jsonify({
+            "code": "not_found",
+            "message": "Companion not found."
+        }), 404
+
+    return jsonify({
+        "id": companion.id,
+        "user_id": companion.user_id,
+        "name": companion.name,
+        "personality": companion.personality,
+        "backstory": companion.backstory,
+        "appearance": companion.appearance,
+        "greeting": companion.greeting,
+        "is_public": companion.is_public,
+        "created_at": companion.created_at.isoformat(),
+        "updated_at": companion.updated_at.isoformat()
+    }), 200
+
