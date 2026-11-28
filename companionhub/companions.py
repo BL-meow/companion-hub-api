@@ -55,11 +55,46 @@ def create_companion():
 @companions_bp.get("")
 @require_auth
 def list_companions():
-    companions = Companion.query.filter_by(
-        user_id=g.current_user_id
-    ).all()
+    details = {}
 
-    return jsonify([
+    try:
+        page = int(request.args.get("page", 1))
+
+        if page < 1:
+            details["page"] = "Must be a positive integer."
+
+    except ValueError:
+        details["page"] = "Must be a positive integer."
+
+    try:
+        per_page = int(request.args.get("per_page", 10))
+
+        if not 1 <= per_page <= 50:
+            details["per_page"] = "Must be an integer between 1 and 50."
+
+    except ValueError:
+        details["per_page"] = "Must be an integer between 1 and 50."
+
+    if details:
+        return jsonify({
+            "code": "validation_error",
+            "message": "Invalid pagination parameters.",
+            "details": details
+        }), 400
+
+    query = Companion.query.filter_by(
+        user_id=g.current_user_id
+    )
+
+    total = query.count()
+
+    offset = (page - 1) * per_page
+
+    companions = query.order_by(
+        Companion.id.asc()
+    ).offset(offset).limit(per_page).all()
+
+    items = [
         {
             "id": companion.id,
             "user_id": companion.user_id,
@@ -73,7 +108,17 @@ def list_companions():
             "updated_at": companion.updated_at.isoformat()
         }
         for companion in companions
-    ]), 200
+    ]
+
+    pages = (total + per_page - 1) // per_page
+
+    return jsonify({
+        "items": items,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "pages": pages
+    }), 200
 
 @companions_bp.get("/<int:companion_id>")
 @require_auth
