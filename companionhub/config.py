@@ -7,7 +7,7 @@ load_dotenv()
 class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-
+    JWT_LIFETIME_SECONDS = int(os.getenv("JWT_LIFETIME_SECONDS", 3600))
 
 class DevelopmentConfig(Config):
     DEBUG = True

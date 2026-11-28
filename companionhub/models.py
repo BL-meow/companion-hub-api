@@ -13,3 +13,5 @@ class User(db.Model):
         default=lambda: datetime.now(timezone.utc),
         nullable=False
     )
+
+    role = db.Column(db.String(20), nullable=False, default="user", server_default="user")

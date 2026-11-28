@@ -1,9 +1,54 @@
-from flask import Blueprint, jsonify, request
-from werkzeug.security import generate_password_hash
+from flask import Blueprint, jsonify, request, current_app, g
+from werkzeug.security import generate_password_hash, check_password_hash
 from .models import User
 from .extensions import db
+from datetime import datetime, timedelta, timezone
+import jwt
+from functools import wraps
+
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
+
+def require_auth(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        auth_header = request.headers.get("Authorization", "")
+        parts = auth_header.split()
+
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            return jsonify({
+                "code": "unauthorized",
+                "message": "Missing or invalid authorization header."
+            }), 401
+
+        token = parts[1]
+
+        try:
+            payload = jwt.decode(
+                token,
+                current_app.config["JWT_SECRET_KEY"],
+                algorithms=["HS256"],
+                options={"require": ["sub", "exp"]}
+            )
+
+            g.current_user_id = int(payload["sub"])
+
+        except jwt.ExpiredSignatureError:
+            return jsonify({
+                "code": "invalid_token",
+                "message": "Token has expired."
+            }), 401
+
+        except (jwt.InvalidTokenError, KeyError, ValueError, TypeError):
+            return jsonify({
+                "code": "invalid_token",
+                "message": "Invalid token."
+            }), 401
+
+        return view(*args, **kwargs)
+
+    return wrapper
+
 
 @auth_bp.post("/register")
 def register():
@@ -65,3 +110,137 @@ def register():
         "email": user.email,
         "created_at": user.created_at.isoformat()
     }), 201
+
+
+@auth_bp.post("/login")
+def login():
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({
+            "code": "invalid_json",
+            "message": "Request body must be a valid JSON object."
+        }), 400
+
+    email = data.get("email")
+    password = data.get("password")
+
+    if not isinstance(email, str) or not isinstance(password, str):
+        return jsonify({
+            "code": "validation_error",
+            "message": "Email and password are required."
+        }), 400
+
+    user = User.query.filter_by(email=email).first()
+
+    if user is None or not check_password_hash(user.password_hash, password):
+        return jsonify({
+            "code": "invalid_credentials",
+            "message": "Invalid credentials."
+        }), 401
+
+    secret = current_app.config["JWT_SECRET_KEY"]
+    lifetime = current_app.config["JWT_LIFETIME_SECONDS"]
+
+    exp = datetime.now(timezone.utc) + timedelta(seconds=lifetime)
+
+    payload = {
+        "sub": str(user.id),
+        "role": "user",
+        "exp": exp
+    }
+
+    token = jwt.encode(payload, secret, algorithm="HS256")
+
+    return jsonify({"access_token": token}), 200
+
+@auth_bp.get("/me")
+@require_auth
+def me():
+    user = db.session.get(User, g.current_user_id)
+
+    if user is None:
+        return jsonify({
+            "code": "unauthorized",
+            "message": "User not found."
+        }), 401
+
+    return jsonify({
+        "id": user.id,
+        "email": user.email,
+        "created_at": user.created_at.isoformat()
+    }), 200
+
+@auth_bp.patch("/me")
+@require_auth
+def update_me():
+    user = db.session.get(User, g.current_user_id)
+
+    if user is None:
+        return jsonify({
+            "code": "unauthorized",
+            "message": "User not found."
+        }), 401
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({
+            "code": "invalid_json",
+            "message": "Request body must be a JSON object."
+        }), 400
+
+    if set(data) - {"email"}:
+        return jsonify({
+            "code": "validation_error",
+            "message": "Only email can be updated."
+        }), 400
+
+    if "email" in data:
+        email = data["email"]
+
+        if not isinstance(email, str) or not 3 <= len(email.strip()) <= 254:
+            return jsonify({
+                "code": "validation_error",
+                "message": "Invalid email."
+            }), 400
+
+        email = email.strip()
+
+        existing = User.query.filter_by(email=email).first()
+
+        if existing is not None and existing.id != user.id:
+            return jsonify({
+                "code": "duplicate_email",
+                "message": "Email is already in use."
+            }), 409
+
+        user.email = email
+        db.session.commit()
+
+    return jsonify({
+        "id": user.id,
+        "email": user.email,
+        "created_at": user.created_at.isoformat()
+    }), 200
+
+@auth_bp.get("/admin-test")
+@require_auth
+def admin_test():
+    user = db.session.get(User, g.current_user_id)
+
+    if user is None:
+        return jsonify({
+            "code": "unauthorized",
+            "message": "User not found."
+        }), 401
+
+    if user.role != "admin":
+        return jsonify({
+            "code": "forbidden",
+            "message": "Admin access required."
+        }), 403
+
+    return jsonify({
+        "message": "Welcome, admin!"
+    }), 200
