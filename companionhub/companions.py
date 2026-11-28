@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request, g, abort
 from .models import Companion
 from .extensions import db
-from .auth import require_auth
+from .decorators import require_auth
 from .validators import validate_companion_body
 
 companions_bp = Blueprint(
