@@ -1,7 +1,8 @@
-from flask import Blueprint, jsonify, request, g
+from flask import Blueprint, jsonify, request, g, abort
 from .models import Companion
 from .extensions import db
 from .auth import require_auth
+from .validators import validate_companion_body
 
 companions_bp = Blueprint(
     "companions",
@@ -15,37 +16,15 @@ companions_bp = Blueprint(
 def create_companion():
     data = request.get_json(silent=True)
 
-    if not isinstance(data, dict):
+    normalized_data, details, error_code = validate_companion_body(data)
+
+    if error_code == "invalid_json":
         return jsonify({
             "code": "invalid_json",
             "message": "Request body must be a JSON object."
         }), 400
 
-    name = data.get("name")
-    personality = data.get("personality")
-
-    details = {}
-
-    if not isinstance(name, str) or not name.strip():
-        details["name"] = "Name is required."
-    elif len(name.strip()) > 100:
-        details["name"] = "Name must not exceed 100 characters."
-
-    if not isinstance(personality, str) or not personality.strip():
-        details["personality"] = "Personality is required."
-
-    for field in ("backstory", "appearance", "greeting"):
-        value = data.get(field)
-
-        if value is not None and not isinstance(value, str):
-            details[field] = "Must be a string."
-
-    is_public = data.get("is_public", False)
-
-    if not isinstance(is_public, bool):
-        details["is_public"] = "Must be a boolean."
-
-    if details:
+    if error_code == "validation_error":
         return jsonify({
             "code": "validation_error",
             "message": "Invalid companion data.",
@@ -54,12 +33,7 @@ def create_companion():
 
     companion = Companion(
         user_id=g.current_user_id,
-        name=name.strip(),
-        personality=personality.strip(),
-        backstory=data.get("backstory"),
-        appearance=data.get("appearance"),
-        greeting=data.get("greeting"),
-        is_public=is_public
+        **normalized_data
     )
 
     db.session.add(companion)
@@ -104,16 +78,13 @@ def list_companions():
 @companions_bp.get("/<int:companion_id>")
 @require_auth
 def get_companion(companion_id):
-    companion = Companion.query.filter_by(
-    id=companion_id,
-    user_id=g.current_user_id
-).first()
+    companion = db.session.get(Companion, companion_id)
 
     if companion is None:
-        return jsonify({
-            "code": "not_found",
-            "message": "Companion not found."
-        }), 404
+        abort(404)
+
+    if companion.user_id != g.current_user_id:
+        abort(403)
 
     return jsonify({
         "id": companion.id,
@@ -127,4 +98,72 @@ def get_companion(companion_id):
         "created_at": companion.created_at.isoformat(),
         "updated_at": companion.updated_at.isoformat()
     }), 200
+
+@companions_bp.patch("/<int:companion_id>")
+@require_auth
+def update_companion(companion_id):
+    companion = db.session.get(Companion, companion_id)
+
+    if companion is None:
+        abort(404)
+
+    if companion.user_id != g.current_user_id:
+        abort(403)
+
+    data = request.get_json(silent=True)
+
+    normalized_data, details, error_code = validate_companion_body(
+        data, partial=True
+    )
+
+    if error_code == "invalid_json":
+        return jsonify({
+            "code": "invalid_json",
+            "message": "Request body must be a JSON object."
+        }), 400
+
+    if error_code == "validation_error":
+        return jsonify({
+            "code": "validation_error",
+            "message": "Invalid companion data.",
+            "details": details
+        }), 400
+
+    for field, value in normalized_data.items():
+        setattr(companion, field, value)
+
+    db.session.commit()
+
+    return jsonify({
+        "id": companion.id,
+        "user_id": companion.user_id,
+        "name": companion.name,
+        "personality": companion.personality,
+        "backstory": companion.backstory,
+        "appearance": companion.appearance,
+        "greeting": companion.greeting,
+        "is_public": companion.is_public,
+        "created_at": companion.created_at.isoformat(),
+        "updated_at": companion.updated_at.isoformat()
+    }), 200
+
+
+@companions_bp.delete("/<int:companion_id>")
+@require_auth
+def delete_companion(companion_id):
+    companion = Companion.query.filter_by(
+        id=companion_id,
+        user_id=g.current_user_id
+    ).first()
+
+    if companion is None:
+        return jsonify({
+            "code": "not_found",
+            "message": "Companion not found."
+        }), 404
+
+    db.session.delete(companion)
+    db.session.commit()
+
+    return "", 204
 
