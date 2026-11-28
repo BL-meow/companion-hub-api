@@ -22,4 +22,6 @@ def create_app(config_name=None):
 
     from .auth import auth_bp
     app.register_blueprint(auth_bp)
+    from .companions import companions_bp
+    app.register_blueprint(companions_bp)
     return app
